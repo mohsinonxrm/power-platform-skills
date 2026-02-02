@@ -51,10 +51,17 @@ def run_skill_evals(
     artifacts_dir = os.path.join(base_dir, "artifacts", plugin, skill)
     work_dir = os.path.join(base_dir, "temp", plugin, skill)
 
+    # Project dir is the plugin directory (e.g., plugins/power-pages)
+    # This ensures Claude has access to the plugin context
+    repo_root = os.path.dirname(base_dir)
+    project_dir = os.path.join(repo_root, "plugins", plugin)
+
     runner = EvalRunner(
         prompts_path=prompts_file,
         artifacts_dir=artifacts_dir,
         work_dir=work_dir,
+        project_dir=project_dir,
+        plugin_dir=project_dir,  # Same as project_dir - the plugin root
     )
 
     results = runner.run(test_id=test_id, run_all=run_all)

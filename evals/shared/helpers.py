@@ -37,9 +37,10 @@ class ClaudeOutput:
     total_cost_usd: float = 0.0
     usage: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
+    trace: list = field(default_factory=list)  # Full conversation trace (separate from raw)
 
     @classmethod
-    def from_json(cls, data: dict) -> "ClaudeOutput":
+    def from_json(cls, data: dict, trace: list = None) -> "ClaudeOutput":
         """Create ClaudeOutput from parsed JSON."""
         return cls(
             type=data.get("type", ""),
@@ -53,6 +54,7 @@ class ClaudeOutput:
             total_cost_usd=data.get("total_cost_usd", 0.0),
             usage=data.get("usage", {}),
             raw=data,
+            trace=trace or [],
         )
 
 
@@ -138,26 +140,46 @@ def run_claude(
     prompt: str,
     work_dir: str,
     timeout: int = 300,
+    project_dir: Optional[str] = None,
+    plugin_dir: Optional[str] = None,
+    model: str = "sonnet",
 ) -> tuple[Optional[ClaudeOutput], int, float]:
     """
     Run Claude in detached mode with JSON output.
 
     Args:
         prompt: The prompt to send to Claude
-        work_dir: Working directory for the command
+        work_dir: Working directory for storing artifacts
         timeout: Timeout in seconds
+        project_dir: Project directory to run Claude from
+        plugin_dir: Plugin directory to load skills from (--plugin-dir)
+        model: Model to use (sonnet, opus, haiku). Defaults to sonnet.
 
     Returns:
         Tuple of (ClaudeOutput or None, exit_code, duration_seconds)
     """
     os.makedirs(work_dir, exist_ok=True)
 
+    # Determine the directory to run Claude from
+    run_dir = project_dir if project_dir else work_dir
+
     start_time = time.time()
+
+    # Build command
+    cmd = ["claude", "-p", "--verbose", "--output-format=json", "--model", model]
+
+    # Add plugin directory if specified
+    if plugin_dir:
+        cmd.extend(["--plugin-dir", plugin_dir])
+
+    # Use -- to separate options from the prompt (required when using variadic flags like --plugin-dir)
+    cmd.append("--")
+    cmd.append(prompt)
 
     try:
         result = subprocess.run(
-            ["claude", "-p", "--output-format=json", prompt],
-            cwd=work_dir,
+            cmd,
+            cwd=run_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -168,6 +190,22 @@ def run_claude(
         if result.stdout:
             try:
                 data = json.loads(result.stdout)
+
+                # Verbose output is a JSON array of messages
+                # The last item with type="result" contains the summary
+                if isinstance(data, list):
+                    # Find the result message
+                    result_msg = None
+                    for msg in reversed(data):
+                        if msg.get("type") == "result":
+                            result_msg = msg
+                            break
+
+                    if result_msg:
+                        # Pass trace separately to avoid circular reference
+                        return ClaudeOutput.from_json(result_msg, trace=data), result.returncode, duration
+
+                # Non-verbose output is a single object
                 return ClaudeOutput.from_json(data), result.returncode, duration
             except json.JSONDecodeError:
                 return ClaudeOutput(result=result.stdout), result.returncode, duration
@@ -180,27 +218,94 @@ def run_claude(
 
 
 def test_skill_triggered(output: Optional[ClaudeOutput], expected_skill: str) -> bool:
-    """Check if the expected skill was triggered based on Claude's output."""
-    if not output or not output.result:
+    """
+    Check if the expected skill was triggered based on Claude's output.
+
+    Uses the full conversation trace to detect:
+    1. Skill tool calls and their results
+    2. Tool usage patterns characteristic of the skill
+    3. Response content (fallback)
+    """
+    if not output:
         return False
 
-    result = output.result.lower()
-    skill = expected_skill.lower().replace("-", "[-_]?")
+    raw = output.raw
+    trace = output.trace  # Use separate trace attribute
 
-    # Check for skill invocation patterns
-    patterns = [
-        rf"/{expected_skill.lower()}",
-        rf"skill.*{skill}",
-        rf"invoking.*{skill}",
-        rf"running.*{skill}",
-        rf"using.*{skill}.*skill",
-        rf"{skill}.*skill",
-        rf"execute.*{skill}",
-    ]
+    # Signal 1: Check for Skill tool calls in the trace
+    skill_call_found = False
+    skill_call_succeeded = False
 
-    for pattern in patterns:
-        if re.search(pattern, result):
-            return True
+    for msg in trace:
+        # Check assistant messages for Skill tool calls
+        if msg.get("type") == "assistant":
+            message = msg.get("message", {})
+            content = message.get("content", [])
+            for block in content:
+                if block.get("type") == "tool_use" and block.get("name") == "Skill":
+                    skill_input = block.get("input", {})
+                    skill_name = skill_input.get("skill", "")
+                    # Check if this is the expected skill (with or without plugin prefix)
+                    if expected_skill in skill_name or skill_name in expected_skill:
+                        skill_call_found = True
+
+        # Check tool results for success/failure
+        if msg.get("type") == "user":
+            tool_result = msg.get("tool_use_result", "")
+            if isinstance(tool_result, str) and "Unknown skill" in tool_result:
+                # Skill was called but not found - this is a FAIL
+                skill_call_succeeded = False
+            elif skill_call_found and not isinstance(tool_result, str):
+                # Non-error result after skill call
+                skill_call_succeeded = True
+
+    # If skill was explicitly called and succeeded, it was triggered
+    if skill_call_found and skill_call_succeeded:
+        return True
+
+    # Signal 2: Check if Claude read the SKILL.md and followed it
+    # (fallback when skill isn't registered but Claude executes manually)
+    skill_md_read = False
+    skill_workflow_started = False
+
+    for msg in trace:
+        if msg.get("type") == "user":
+            result = msg.get("tool_use_result", {})
+            if isinstance(result, dict):
+                file_info = result.get("file", {})
+                file_path = file_info.get("filePath", "")
+                if "SKILL.md" in file_path and expected_skill.replace("-", "") in file_path.lower().replace("-", ""):
+                    skill_md_read = True
+
+    # Signal 3: Check for characteristic tool usage (skill is working)
+    permission_denials = raw.get("permission_denials", [])
+    if permission_denials:
+        tool_names = [d.get("tool_name") for d in permission_denials]
+        # AskUserQuestion is characteristic of skill workflows
+        if "AskUserQuestion" in tool_names:
+            skill_workflow_started = True
+
+    # If SKILL.md was read AND workflow started, skill was triggered (manual execution)
+    if skill_md_read and skill_workflow_started:
+        return True
+
+    # Signal 4: Multiple turns with skill-related content
+    if output.num_turns >= 5 and skill_md_read:
+        return True
+
+    # Signal 5: Negative indicators - skill definitely NOT triggered
+    if output.result:
+        result = output.result.lower()
+        negative_patterns = [
+            r"need permission to access",
+            r"don't have access",
+            r"cannot access",
+            r"unable to access",
+            r"check your available skills",
+        ]
+        for pattern in negative_patterns:
+            if re.search(pattern, result):
+                return False
 
     return False
 

@@ -29,6 +29,8 @@ class EvalRunner:
         artifacts_dir: str = "artifacts",
         work_dir: str = "temp",
         timeout: int = 300,
+        project_dir: Optional[str] = None,
+        plugin_dir: Optional[str] = None,
     ):
         """
         Initialize the eval runner.
@@ -38,11 +40,15 @@ class EvalRunner:
             artifacts_dir: Directory for storing test artifacts
             work_dir: Working directory for test execution
             timeout: Timeout per test in seconds
+            project_dir: Project directory to run Claude from
+            plugin_dir: Plugin directory to load skills from (--plugin-dir)
         """
         self.prompts_path = prompts_path
         self.artifacts_dir = artifacts_dir
         self.work_dir = work_dir
         self.timeout = timeout
+        self.project_dir = project_dir
+        self.plugin_dir = plugin_dir
         self.tests = load_prompts(prompts_path)
 
     def run_test(self, test: TestCase) -> TestResult:
@@ -82,6 +88,8 @@ class EvalRunner:
                 test.prompt,
                 test_work_dir,
                 self.timeout,
+                project_dir=self.project_dir,
+                plugin_dir=self.plugin_dir,
             )
 
             if exit_code == -1:
@@ -102,6 +110,40 @@ class EvalRunner:
                 skill_triggered = test_skill_triggered(output, test.expected_skill)
                 passes = skill_triggered == test.should_trigger
 
+                # Debug: show detection signals
+                if output:
+                    print_colored(f"Turns: {output.num_turns}", "gray")
+
+                    # Check for Skill tool calls in trace
+                    trace = output.trace
+                    skill_calls = []
+                    tools_used = []
+                    for msg in trace:
+                        if msg.get("type") == "assistant":
+                            content = msg.get("message", {}).get("content", [])
+                            for block in content:
+                                if block.get("type") == "tool_use":
+                                    tool_name = block.get("name", "")
+                                    tools_used.append(tool_name)
+                                    if tool_name == "Skill":
+                                        skill_calls.append(block.get("input", {}).get("skill", ""))
+
+                    if skill_calls:
+                        print_colored(f"Skill calls: {skill_calls}", "cyan")
+                    if tools_used:
+                        unique_tools = list(dict.fromkeys(tools_used))  # preserve order, remove dups
+                        print_colored(f"Tools used: {unique_tools[:10]}", "gray")
+
+                    # Show permission denials
+                    permission_denials = output.raw.get("permission_denials", [])
+                    if permission_denials:
+                        denied = [d.get("tool_name") for d in permission_denials]
+                        print_colored(f"Permission denied: {denied}", "yellow")
+
+                    if output.result:
+                        preview = output.result[:120].replace("\n", " ")
+                        print_colored(f"Response: {preview}...", "gray")
+
                 result = TestResult(
                     id=test.id,
                     status="pass" if passes else "fail",
@@ -121,6 +163,10 @@ class EvalRunner:
                         f"got trigger={skill_triggered}",
                         "red",
                     )
+                print_colored(
+                    f"  (should_trigger={test.should_trigger}, skill_triggered={skill_triggered})",
+                    "gray",
+                )
 
         except Exception as e:
             print_colored(f"ERROR: {e}", "red")
@@ -134,7 +180,12 @@ class EvalRunner:
         save_json(result.to_dict(), os.path.join(test_artifacts, "result.json"))
 
         if result.output:
+            # Save output (raw doesn't contain trace, so no circular reference)
             save_json(result.output.raw, os.path.join(test_artifacts, "output.json"))
+
+            # Save full trace separately
+            if result.output.trace:
+                save_json(result.output.trace, os.path.join(test_artifacts, "trace.json"))
 
         return result
 
