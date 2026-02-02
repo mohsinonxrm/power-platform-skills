@@ -8,11 +8,6 @@
       "weight": 20
     },
     {
-      "id": "used_plan_mode",
-      "description": "Entered plan mode before implementation",
-      "weight": 25
-    },
-    {
       "id": "mentioned_spa_constraint",
       "description": "Mentioned SPA-only constraint (no Next.js, Nuxt, SSR frameworks)",
       "weight": 15
@@ -21,11 +16,6 @@
       "id": "asked_site_purpose",
       "description": "Asked about site purpose and target audience",
       "weight": 15
-    },
-    {
-      "id": "suggested_next_steps",
-      "description": "Suggested follow-up skills like /add-seo, /add-tests, or /setup-dataverse",
-      "weight": 10
     },
     {
       "id": "response_quality",
