@@ -9,7 +9,7 @@ Official Copilot CLI extensions for Power Platform development by Microsoft.
 Run this command in your terminal to clone and launch Copilot CLI with the Power Pages plugin:
 
 ```bash
-git clone https://github.com/microsoft/power-platform-claude-plugins.git && copilot --plugin-dir power-platform-claude-plugins/plugins/power-pages
+git clone https://github.com/microsoft/power-platform-claude-plugins.git && claude --plugin-dir power-platform-claude-plugins/plugins/power-pages
 ```
 
 ## Overview
