@@ -50,37 +50,38 @@ Build and deploy Power Apps generative pages for model-driven apps.
 
 ## Installation
 
-### Add from GitHub Marketplace
+### Quick Install (Recommended)
 
-To use a plugin from this marketplace:
+Run the installer to set up all plugins with auto-update enabled:
 
-1. Add the marketplace to your agent
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js | node
+```
 
-    ```bash
+> **Windows (PowerShell)**:
+> ```powershell
+> iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js -OutFile install.js; node install.js; del install.js
+> ```
+
+The installer automatically:
+- Detects available tools (Claude Code, GitHub Copilot CLI)
+- Registers the plugin marketplace and installs all listed plugins
+- Enables auto-update so plugins stay current
+
+### Manual Installation
+
+If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
+
+1. Add the marketplace
+
+    ```
     /plugin marketplace add microsoft/power-platform-skills
     ```
 
 2. Install the desired plugin
 
-    ```bash
-    /plugin install power-pages@power-platform-skills
-    /plugin install power-apps@power-platform-skills
     ```
-
-### Add from local path
-
-1. Clone this repository
-1. Add the marketplace to your agent
-
-    ```bash
-    /plugin marketplace add /path/to/power-platform-skills
-    ```
-
-1. Install the desired plugin (installs to user scope by default)
-
-    ```bash
     /plugin install power-pages@power-platform-skills
-    /plugin install power-apps@power-platform-skills
     ```
 
 ## Local Development
